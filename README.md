@@ -64,4 +64,4 @@ Using the "cb" archive tool the file size with no compression is 4.3G, but using
 
 ## Raspbian releases
 
-When doing a longer test with all releases of Raspbian for the Raspberry Pi (57GB in 69 zip files - 186G extracted) compresses with "cb" to 5.7G.
+When doing a longer test with all releases of Raspbian for the Raspberry Pi (57GB in 69 zip files - 186G extracted) archives with "cb" to 25G (compression disabled) and then to 5.7G using either builtin or external compression (xz -9).
