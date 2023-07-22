@@ -2,7 +2,7 @@
 #
 # Block Compress https://github.com/burtyb/cb
 #
-# Chris Burton (c) 2019
+# Chris Burton (c) 2019-2023
 #
 
 import argparse, sys, struct, os, hashlib, binascii, time
@@ -31,6 +31,7 @@ args = p.parse_args()
 
 # Disabled option
 args.savelast = False
+args.map = False
 
 # block size (for archive)
 cfg_bs = args.block
