@@ -2,13 +2,13 @@
 #
 # Block Compress https://github.com/burtyb/cb
 #
-# Chris Burton (c) 2019-01-13
+# Chris Burton (c) 2019
 #
 
 import argparse, sys, struct, os, hashlib, binascii, time
 
 # Data file version
-cfg_version = 0x01
+cfg_version = 0x02
 
 p = argparse.ArgumentParser(description='Compress Blocks')
 mode = p.add_mutually_exclusive_group(required=True)
@@ -19,21 +19,24 @@ p.add_argument('-b','--block', help='Block size in bytes (default %(default)s)',
 p.add_argument('-D', '--debug', help='Show LOTS of debug information', default=False, action='store_true')
 p.add_argument('-p','--progress', help="Show progress", default=False, action='store_true')
 p.add_argument('-H','--hash', help='Hash algorithm (default %(default)s)', choices=['md5','sha1','sha224','sha256','sha384','sha512'], default='sha1')
+p.add_argument('-M','--map', help="Map filename for archive or extract (can be reused) e.g. '-M /dev/sda hdd.img -M /dev/mmcblk1 sd.img'", action='append', nargs=2)
 p.add_argument('-c','--compression', help='Builtin compression algorithm', choices=['none','xz','bz2'], default='xz')
 p.add_argument('-C','--compressionlevel', help='Compression level 1-9', choices=range(1,10), type=int, default=None)
-p.add_argument('-L','--savelast', help='Save clone pointer to last block instead of first', default=False, action='store_true')
+#p.add_argument('-L','--savelast', help='Save clone pointer to last block instead of first', default=False, action='store_true')
 p.add_argument('-v','--verbose', help='Show hash signatures', default=False, action='store_true')
-p.add_argument('-S', help='TODO stuff :)', action='store_true', default=False)
+p.add_argument('-S', '--solid', help='Create solid (bigger) archive allowing quicker selective file extract', action='store_true', default=False)
 p.add_argument('file', help='In/output archive filename', nargs=1)
 p.add_argument('files', help='Files to compress', nargs='*')
 args = p.parse_args()
 
+# Disabled option
+args.savelast = False
+
 # block size (for archive)
 cfg_bs = args.block
 
-# If the output file is called '-' write to stdout
-if args.file[0] == '-':
-	args.file[0] = '/dev/stdout'
+# List of files to cleanup if we exit
+cleanup = []
 
 # hash options (for archive)
 if args.hash=='md5':
@@ -69,23 +72,27 @@ elif args.hash=='sha512':
 
 # Return 'format' to read/write the number of bits needed to store the number 'x'
 def format_for(x):
-	if(x.bit_length()>(4*8)): # Does it need an unsigned long long (8 bytes)?
+	if x.bit_length()>(4*8): # Does it need an unsigned long long (8 bytes)?
 		return 'Q'
-	elif(x.bit_length()>(2*8)): # Does it need a unsigned long (4 bytes)?
+	elif x.bit_length()>(2*8): # Does it need a unsigned long (4 bytes)?
 		return 'L'
-	elif(x.bit_length()>(1*8)): # Does it need a unsigned short (2 bytes)?
+	elif x.bit_length()>(1*8): # Does it need a unsigned short (2 bytes)?
 		return 'H'
 	return 'B' # Otherwise a byte will do
 
 # Archive files
 def cmd_archive():
+	# If the output file is called '-' write to stdout
+	if args.file[0] == '-':
+		args.file[0] = '/dev/stdout'
+
 	if args.compression=='xz':
 		import lzma
 		cfg_comp = 0x01
 		if args.compressionlevel:
 			clevel=args.compressionlevel
 		else:
-			clevel=6 # default for xz
+			clevel=9 # default for xz
 		def comp(fn, mode, level):
 			return lzma.LZMAFile(fn, mode, preset=level)
 	elif args.compression=='bz2':
@@ -103,8 +110,12 @@ def cmd_archive():
 		def comp(fn, mode, level):
 			return fn
 
+	cfg_options = 0
+	if args.solid:
+		cfg_options = cfg_options | 0x1
+
 	# Open archive file for output
-	if(os.path.isfile(args.file[0]) and args.file[0] != '/dev/stdout'):
+	if os.path.isfile(args.file[0]) and args.file[0] != '/dev/stdout':
 		print("Output archive file already exists", file=sys.stderr )
 		sys.exit(1)
 
@@ -121,8 +132,9 @@ def cmd_archive():
 	# internal compression method (2 bytes)
 	# number of files (4 bytes)
 	# block size (4 bytes)
+	# options (4 bytes)
 	o.write(b"CRB\0")
-	o.write(struct.pack('>IHHHII', cfg_version, cfg_hash, cfg_hashlen, cfg_comp, numfiles, cfg_bs ))
+	o.write(struct.pack('>IHHHIII', cfg_version, cfg_hash, cfg_hashlen, cfg_comp, numfiles, cfg_bs, cfg_options ))
 
 	# Enable internal compression if needed
 	o = comp(o, "w", clevel)
@@ -136,9 +148,24 @@ def cmd_archive():
 		if args.verbose:
 			print( "Input: {}".format(fn), file=sys.stderr )
 		finfo = os.stat(fn)
-		o.write(struct.pack('>I', len(fn))) # Length of filename
-		o.write( fn.encode('utf-8') ) # Filename
-		o.write(struct.pack('>Q', finfo.st_size)) # unsigned long long (8b) # File Size
+
+		# If we have a device the size is 0 so try and seek to find the real file size
+		if finfo.st_size==0:
+			tmp=open(fn,'rb')
+			try:
+				tmp.seek(0,2)
+				fsize=tmp.tell()
+			finally:
+				tmp.close()
+		else:
+			fsize=finfo.st_size
+
+		# Remove leading '/' to prevent clobering files
+		fn_save = fn.lstrip('/')
+
+		o.write(struct.pack('>I', len(fn_save))) # Length of filename
+		o.write( fn_save.encode('utf-8') ) # Filename
+		o.write(struct.pack('>Q', fsize)) # unsigned long long (8b) # File Size
 		o.write(struct.pack('>Q', int(finfo.st_mtime) )) # unsigned long long (8b) # Modification time
 		o.write(struct.pack('>Q', finfo.st_uid)) # unsigned long long (8b) # UID
 		o.write(struct.pack('>Q', finfo.st_gid)) # unsigned long long (8b) # GID
@@ -149,16 +176,16 @@ def cmd_archive():
 		# Attribute data
 
 		f = open(fn, 'rb')
-		if( (finfo.st_size/cfg_bs) > max_blocks ):
-			max_blocks = int(finfo.st_size/cfg_bs)
+		if (fsize/cfg_bs) > max_blocks:
+			max_blocks = int(fsize/cfg_bs)
 
 		# dat [file, filename, filesize in blocks, hashlib]
-		dat = [ i, f, fn, (finfo.st_size/cfg_bs), h() ]
+		dat = [ i, f, fn, (fsize/cfg_bs), h() ]
 
-		total_blocks = total_blocks + int(finfo.st_size/cfg_bs)
+		total_blocks = total_blocks + int(fsize/cfg_bs)
 
 		# If we have a partial block increment number of blocks
-		if finfo.st_size%cfg_bs:
+		if fsize%cfg_bs:
 			dat[3]=dat[3]+1
 			total_blocks=total_blocks+1
 		files.append(dat)
@@ -170,7 +197,11 @@ def cmd_archive():
 	block_format = format_for(max_blocks)
 
 	# For each unique hash track the last or first file/block number that used it
-	hashdict = {}
+	if args.solid:
+		# If we're creating solid archive we need a dict for each file
+		hashdict = [dict() for x in range(numfiles)]
+	else:
+		hashdict = [{}]
 
 	# Statistics
 	total = 0
@@ -182,13 +213,19 @@ def cmd_archive():
 
 	for block in range(max_blocks+1):
 		for file in files:
-			if(block==(file[3]-1)):
+			if block==(file[3]-1):
 				filesleft = filesleft - 1
-			if(block>(file[3]-1)):
+			if block>(file[3]-1):
 				continue
-			if(args.progress and total!=0 and progress_last_show < int(time.time())):
+			if args.progress and total!=0 and progress_last_show < int(time.time()):
 				tmpstat = os.stat(args.file[0])
-				sys.stderr.write("\r{:3}% {}/{} (c:{} u:{} br:{:.2f} f:{}/{}) r:{:.2f}".format( round(int(100*total/total_blocks),0), total, total_blocks, (total-written), len(hashdict), float(written)/float(total), filesleft, numfiles, (tmpstat.st_size/(total*cfg_bs)) ))
+				if args.solid:
+					hashlen = 0
+					for x in range(len(hashdict)):
+						hashlen = hashlen + len(hashdict[x])
+				else:
+					hashlen = len(hashdict[0])
+				sys.stderr.write("\r{:3}% {}/{} (c:{} u:{} br:{:.2f} f:{}/{}) r:{:.2f}".format( round(int(100*total/total_blocks),0), total, total_blocks, (total-written), hashlen, float(written)/float(total), filesleft, numfiles, (tmpstat.st_size/(total*cfg_bs)) ))
 				progress_last_show = int(time.time())
 
 			buf = file[1].read(cfg_bs)
@@ -197,7 +234,7 @@ def cmd_archive():
 
 			total = total + 1
 
-			if(len(buf) < cfg_bs):
+			if len(buf) < cfg_bs:
 				# PARTIAL BLOCK (< csf_bs)
 				o.write( struct.pack('>B', 0x02) )
 				o.write( struct.pack('>Q', len(buf)))
@@ -206,38 +243,84 @@ def cmd_archive():
 				hash = h()
 				hash.update(buf)
 				digest = hash.digest()
-				if digest in hashdict: # CLONE
+				if args.solid:
+					hashdict_index = file[0]
+				else:
+					hashdict_index = 0
+				if digest in hashdict[hashdict_index]: # CLONE
 					o.write( struct.pack('>B', 0x01) ) # Existing block
-					dat = hashdict[digest]
+					dat = hashdict[hashdict_index][digest]
 					o.write( struct.pack('>'+numfiles_format, dat[0]) ) # file number
 					o.write( struct.pack('>'+block_format, dat[1]) ) # block number
 					if args.savelast:
-						hashdict[digest] = [ file[0], block ]
+						hashdict[hashdict_index][digest] = [ file[0], block ]
 				else: # NEW
 					# file number, block number
-					hashdict[digest] = [ file[0], block ]
+					hashdict[hashdict_index][digest] = [ file[0], block ]
 					o.write( struct.pack('>B', 0x00)) # New block
 					o.write(buf)
 					written = written + 1
 
 	# Show completed progress bar
-	if(total!=0 and args.progress):
+	if total!=0 and args.progress:
 		tmpstat = os.stat(args.file[0])
-		sys.stderr.write("\r{:3}% {}/{} (c:{} u:{} br:{:.2f} f:{}/{}) r:{:.2f}\n".format( round(int(100*total/total_blocks),0), total, total_blocks, (total-written), len(hashdict), float(written)/float(total), filesleft, numfiles, (tmpstat.st_size/(total*cfg_bs)) ))
+		if args.solid:
+			hashlen = 0
+			for x in range(len(hashdict)):
+				hashlen = hashlen + len(hashdict[x])
+		else:
+			hashlen = len(hashdict[0])
+		sys.stderr.write("\r{:3}% {}/{} (c:{} u:{} br:{:.2f} f:{}/{}) r:{:.2f}\n".format( round(int(100*total/total_blocks),0), total, total_blocks, (total-written), hashlen, float(written)/float(total), filesleft, numfiles, (tmpstat.st_size/(total*cfg_bs)) ))
 	
 	# Write computed hashes for input files
 	for file in files:
-		if(args.verbose):
+		if args.verbose:
 			print( "{}  {}".format(file[4].hexdigest(), file[2]), file=sys.stderr )
 		o.write(file[4].digest())
 
 def cmd_extract():
+	# If the input file is called '-' read from stdin
+	if args.file[0] == '-':
+		args.file[0] = '/dev/stdin'
+
+	if not os.path.isfile(args.file[0]):
+		print("Unable to open input file ({})".format(args.file[0]), file=sys.stderr )
+		sys.exit(1)
+
 	i = open(args.file[0], 'rb')
 
 	# Read archive metadata
-	if(i.read(4)!=b"CRB\0"):
-		print("Invalid signature", file=sys.stderr)
-		sys.exit(1)
+
+	# Check signature
+	signature = i.read(4)
+	external_comp = 0
+	if signature!=b"CRB\0":
+		# Check if we have a compressed file we can deal with
+		if signature[0]==0xfd and signature[1]==0x37 and signature[2]==0x7a and signature[3]==0x58:
+			i.close()
+			if args.verbose:
+				print("Detected external xz compression", file=sys.stderr)
+			import lzma
+			i = lzma.LZMAFile(args.file[0], 'rb')
+			signature = i.read(4)
+			if signature!=b"CRB\0":
+				print("Invalid signature(ZX)", file=sys.stderr)
+				sys.exit(1)
+			external_comp = 1
+		elif signature[0]==0x42 and signature[1]==0x5a and signature[2]==0x68:
+			i.close()
+			if args.verbose:
+				print("Detected external bz2 compression", file=sys.stderr)
+			import bz2
+			i = bz2.BZ2File(args.file[0], 'rb')
+			signature = i.read(4)
+			if signature!=b"CRB\0":
+				print("Invalid signature(BZ2)", file=sys.stderr)
+				sys.exit(1)
+			external_comp = 2
+		else:
+			print("Invalid signature", file=sys.stderr)
+			sys.exit(1)
 
 	s_fmt = '>IHHHII'
 	s_len = struct.calcsize(s_fmt)
@@ -249,44 +332,49 @@ def cmd_extract():
 	numfiles        = dat[4]
 	cfg_bs          = dat[5]
 
+	if cfg_version>1:
+		cfg_options = struct.unpack('>I', i.read(4))
+	else:
+		cfg_options = 0
+
 	numfiles_format = format_for(numfiles)
 
-	if(cfg_version != 0x1):
-		print("Invalid data version", file=sys.stderr)
+	if not (cfg_version == 0x1 or cfg_version == 0x02):
+		print("Invalid data version ({})".format(cfg_version), file=sys.stderr)
 		sys.exit(1)
 
-	if(cfg_hash==0x0000): # md5
-		if(cfg_hashlen!=16):
+	if cfg_hash==0x0000: # md5
+		if cfg_hashlen!=16:
 			print("Hash length mismatch 16!={}".format(cfg_hashlen), file=sys.stderr)
 			sys.exit(1)
 		def h():
 			return hashlib.md5()
-	elif(cfg_hash==0x0001): # sha1
-		if(cfg_hashlen!=20):
+	elif cfg_hash==0x0001: # sha1
+		if cfg_hashlen!=20:
 			print("Hash length mismatch 20!={}".format(cfg_hashlen), file=sys.stderr)
 			sys.exit(1)
 		def h():
 			return hashlib.sha1()
-	elif(cfg_hash==0x0002): # sha224
-		if(cfg_hashlen!=28):
+	elif cfg_hash==0x0002: # sha224
+		if cfg_hashlen!=28:
 			print("Hash length mismatch 28!={}".format(cfg_hashlen), file=sys.stderr)
 			sys.exit(1)
 		def h():
 			return hashlib.sha224()
-	elif(cfg_hash==0x0003): # sha256
-		if(cfg_hashlen!=32):
+	elif cfg_hash==0x0003: # sha256
+		if cfg_hashlen!=32:
 			print("Hash length mismatch 32!={}".format(cfg_hashlen), file=sys.stderr)
 			sys.exit(1)
 		def h():
 			return hashlib.sha256()
-	elif(cfg_hash==0x0004): # sha384
-		if(cfg_hashlen!=48):
+	elif cfg_hash==0x0004: # sha384
+		if cfg_hashlen!=48:
 			print("Hash length mismatch 48!={}".format(cfg_hashlen), file=sys.stderr)
 			sys.exit(1)
 		def h():
 			return hashlib.sha384()
-	elif(cfg_hash==0x0005): # sha512
-		if(cfg_hashlen!=64):
+	elif cfg_hash==0x0005: # sha512
+		if cfg_hashlen!=64:
 			print("Hash length mismatch 64!={}".format(cfg_hashlen), file=sys.stderr)
 			sys.exit(1)
 		def h():
@@ -314,6 +402,7 @@ def cmd_extract():
 	max_blocks = 0
 	total_blocks = 0
 
+	extract = []
 	# Get metadata for each file
 	for j in range(numfiles):
 		# TODO combine reads
@@ -353,7 +442,9 @@ def cmd_extract():
 
 		fileblocks = int(st_size/cfg_bs)
 
-		if(os.path.isfile(fn)):
+		fn = fn.lstrip('/')
+
+		if os.path.isfile(fn):
 			print("ERROR: file {} already exists".format(fn), file=sys.stderr )
 			sys.exit(1)
 
@@ -381,10 +472,24 @@ def cmd_extract():
 			fileblocks=fileblocks+1
 			total_blocks=total_blocks+1
 
-		if(fileblocks>max_blocks):
+		if fileblocks>max_blocks:
 			max_blocks = fileblocks
 
 		files.append(dat)
+
+		if len(args.files)==0: # If no files listed
+			extract.append(dat[0]) # Just add id to extract
+		else:
+			if fn in args.files:
+				extract.append(dat[0]) # Add ID if it's listed in the files to extract
+
+		# If we need to exit remove the output file
+		cleanup.append(fn)
+	
+
+	if len(extract)<len(args.files):
+		print("ERROR: File to extract not found in archive", file=sys.stderr )
+		clean_exit()
 
 	block_format = format_for(max_blocks)
 
@@ -399,10 +504,10 @@ def cmd_extract():
 	
 	for block in range(max_blocks):
 		for file in files:
-			if(block>(file[3]-1)):
+			if block>(file[3]-1):
 				continue
 
-			if(args.progress and written!=0 and progress_last_show < int(time.time())):
+			if args.progress and written!=0 and progress_last_show < int(time.time()):
 				tmpstat = os.stat(args.file[0])
 				sys.stderr.write( "\r{:3}% {}/{}".format( round(int(100*written/total_blocks), 0), written, total_blocks) )
 				progress_last_show = int(time.time())
@@ -411,7 +516,7 @@ def cmd_extract():
 			b = b[0]
 
 			# Ensure we're at the correct place within the file
-			if(file[1].tell() != (block*cfg_bs)):
+			if file[1].tell() != (block*cfg_bs):
 				print("File position error {} {}".format(file[1].tell(), (block*cfg_bs)), file=sys.stderr )
 				sys.exit(1)
 
@@ -420,6 +525,8 @@ def cmd_extract():
 				buf = i.read(cfg_bs)
 				file[4].update(buf)
 				file[1].write(buf)
+				if args.debug:
+					print( "DEBUG:x:new:[b:{}:f:{}]".format(block,file[0]), file=sys.stderr )
 			elif b==0x01: # CLONE
 				s_fmti = '>'+numfiles_format+block_format # file_number, block_number
 				s_leni = struct.calcsize(s_fmti)
@@ -431,6 +538,8 @@ def cmd_extract():
 				files[d[0]][1].seek(offset) # Seek back before trying to write
 				file[4].update(buf)
 				file[1].write(buf)
+				if args.debug:
+					print( "DEBUG:x:clone:[b:{}:f:{}]<[b:{}:f:{}]".format(block,file[0],d[1],d[0]), file=sys.stderr )
 			elif b==0x02: # PARTIAL
 				s_fmti = '>Q'
 				s_leni = struct.calcsize(s_fmti)
@@ -438,13 +547,15 @@ def cmd_extract():
 				buf = i.read(d[0])
 				file[4].update(buf)
 				file[1].write(buf)
+				if args.debug:
+					print( "DEBUG:x:partial:[b:{}:f:{}:s:{}]".format(block,file[0],d[0]), file=sys.stderr )
 			else:
 				print("ERROR: unknown block type {}".format(b), file=sys.stderr )
 				print("position: {}".format(i.tell()), file=sys.stderr )
 				sys.exit(1)
 			written=written+1
 
-	if(args.progress):
+	if args.progress:
 		sys.stderr.write( "\r{:3}% {}/{}\n".format( round(int(100*written/total_blocks), 0), written, total_blocks) )
 
 	hash_ok = True
@@ -453,7 +564,7 @@ def cmd_extract():
 		tmp = i.read(cfg_hashlen)
 		hash_computed = file[4].hexdigest()
 		hash_saved    = binascii.hexlify(tmp).decode('ascii')
-		if(hash_computed==hash_saved):
+		if hash_computed==hash_saved:
 			status='OK'
 		else:
 			status='FAILED'
@@ -462,16 +573,50 @@ def cmd_extract():
 			print("{} {} OK".format(file[2], hash_saved), file=sys.stderr )
 
 	if not hash_ok:
-		print("ERROR: Hash failure", file=sys.stderr )
+		print("ERROR: Extract hash failure", file=sys.stderr )
+		clean_exit()
 		
 
 def cmd_list():
+	# If the input file is called '-' read from stdin
+	if args.file[0] == '-':
+		args.file[0] = '/dev/stdin'
+
+	if not os.path.isfile(args.file[0]):
+		print("Unable to open input file ({})".format(args.file[0]), file=sys.stderr )
+		sys.exit(1)
+
 	i = open(args.file[0], 'rb')
 
 	# Read archive metadata
-	if(i.read(4)!=b"CRB\0"):
-		print("Invalid signature", file=sys.stderr)
-		sys.exit(1)
+	signature = i.read(4)
+	external_comp = 0
+	if signature!=b"CRB\0":
+		if signature[0]==0xfd and signature[1]==0x37 and signature[2]==0x7a and signature[3]==0x58:
+			i.close()
+			if args.verbose:
+				print("Detected external xz compression", file=sys.stderr)
+			import lzma
+			i = lzma.LZMAFile(args.file[0], 'rb')
+			signature = i.read(4)
+			if signature!=b"CRB\0":
+				print("Invalid signature(ZX)", file=sys.stderr)
+				sys.exit(1)
+			external_comp = 1
+		elif signature[0]==0x42 and signature[1]==0x5a and signature[2]==0x68:
+			i.close()
+			if args.verbose:
+				print("Detected external bz2 compression", file=sys.stderr)
+			import bz2
+			i = bz2.BZ2File(args.file[0], 'rb')
+			signature = i.read(4)
+			if signature!=b"CRB\0":
+				print("Invalid signature(BZ2)", file=sys.stderr)
+				sys.exit(1)
+			external_comp = 2
+		else:
+			print("Invalid signature", file=sys.stderr)
+			sys.exit(1)
 
 	s_fmt = '>IHHHII'
 	s_len = struct.calcsize(s_fmt)
@@ -483,8 +628,13 @@ def cmd_list():
 	numfiles        = dat[4]
 	cfg_bs          = dat[5]
 
+	if cfg_version>1:
+		cfg_options = struct.unpack('>I', i.read(4))
+	else:
+		cfg_options = 0
+
 	numfiles_format = format_for(numfiles)
-	if(cfg_version != 0x1):
+	if not (cfg_version == 0x1 or cfg_version == 0x02):
 		print("Invalid data version", file=sys.stderr)
 		sys.exit(1)
 
@@ -505,6 +655,7 @@ def cmd_list():
 	files = []
 	max_blocks = 0
 
+	filedata = ''
 	# Get metadata for each file
 	for j in range(numfiles):
 		# Get filename length
@@ -552,28 +703,36 @@ def cmd_list():
 		if st_size%cfg_bs:
 			fileblocks=fileblocks+1
 
-		if(fileblocks>max_blocks):
+		if fileblocks>max_blocks:
 			max_blocks = fileblocks
 
-		print( "file{}:{}:{}:{}:{}:{}".format(j, fn, st_size, st_mtime, st_uid, st_gid) )
+		fn = fn.lstrip('/')
+
+		filedata=filedata+"file{}:{}:{}:{}:{}:{}\n".format(j, fn, st_size, st_mtime, st_uid, st_gid)
 
 	print("program:Compress Blocks")
 	print("version:{}".format(cfg_version))
 	print("hash:{}".format(cfg_hash))
 	print("hash_len:{}".format(cfg_hashlen))
-	print("compression:{}".format(cfg_comp))
+	print("compression:{}:{}".format(cfg_comp, external_comp))
 	print("numfiles:{}".format(numfiles))
 	print("block_size:{}".format(cfg_bs))
 	print("block_bits:{}:{}".format(max_blocks.bit_length(), format_for(max_blocks)))
 	print("file_bits:{}:{}".format(numfiles.bit_length(), format_for(numfiles)))
+	print(filedata, end='')
 
+# If we need to exit after we've opened output files remove them before exit
+def clean_exit():
+	for f in cleanup:
+		os.remove(f)
+	sys.exit(2)
 
 # Mode
 
 if args.extract:
 	cmd_extract()
 elif args.archive:
-	if(len(args.files)<1):
+	if len(args.files)<1:
 		print("ERROR: Missing files to archive", file=sys.stderr)
 		sys.exit(2)
 	cmd_archive()
