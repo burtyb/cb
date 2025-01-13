@@ -31,7 +31,6 @@ args = p.parse_args()
 
 # Disabled option
 args.savelast = False
-args.map = False
 
 # block size (for archive)
 cfg_bs = args.block
@@ -414,6 +413,11 @@ def cmd_extract():
 		fnlen = dat[0]
 		# Get filename
 		fn = i.read(fnlen).decode('utf-8')
+
+		# Check if we need to remap a filename
+		for map in args.map:
+			if map[0] == fn:
+				fn = map[1]
 
 		# Get filesize
 		s_fmt = '>Q'
