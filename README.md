@@ -5,8 +5,8 @@ cb is a tool for compressing files with repeated blocks (such as Raspberry Pi SD
 
 ```
 usage: cb [-h] (-a | -x | -l) [-b BLOCK] [-D] [-p]
-          [-H {md5,sha1,sha224,sha256,sha384,sha512}] [-c {none,xz,bz2}]
-          [-C {1,2,3,4,5,6,7,8,9}] [-L] [-v] [-S]
+          [-H {md5,sha1,sha224,sha256,sha384,sha512}] [-M MAP MAP]
+          [-c {none,xz,bz2}] [-C {1,2,3,4,5,6,7,8,9}] [-v] [-S]
           file [files [files ...]]
 
 Compress Blocks
@@ -25,12 +25,14 @@ optional arguments:
   -D, --debug           Show LOTS of debug information
   -p, --progress        Show progress
   -H {md5,sha1,sha224,sha256,sha384,sha512}, --hash {md5,sha1,sha224,sha256,sha384,sha512}
-                        Hash algorithm (default sha1)
+                        Hash algorithm (default sha256)
+  -M MAP MAP, --map MAP MAP
+                        Map filename for archive or extract (can be reused)
+                        e.g. '-M /dev/sda hdd.img -M /dev/mmcblk1 sd.img'
   -c {none,xz,bz2}, --compression {none,xz,bz2}
                         Builtin compression algorithm
   -C {1,2,3,4,5,6,7,8,9}, --compressionlevel {1,2,3,4,5,6,7,8,9}
                         Compression level 1-9
-  -L, --savelast        Save clone pointer to last block instead of first
   -v, --verbose         Show hash signatures
   -S                    TODO stuff :)
 ```
