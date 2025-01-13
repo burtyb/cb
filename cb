@@ -418,6 +418,8 @@ def cmd_extract():
 		for map in args.map:
 			if map[0] == fn:
 				fn = map[1]
+				if args.verbose:
+					print("Mapping file '{}' -> '{}'".format(fn, map[1]), file=sys.stderr )
 
 		# Get filesize
 		s_fmt = '>Q'
