@@ -92,7 +92,7 @@ def cmd_archive():
 		if args.compressionlevel:
 			clevel=args.compressionlevel
 		else:
-			clevel=9 # default for xz
+			clevel=6 # default for xz
 		def comp(fn, mode, level):
 			return lzma.LZMAFile(fn, mode, preset=level)
 	elif args.compression=='bz2':
