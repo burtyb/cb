@@ -2,7 +2,7 @@
 #
 # Block Compress https://github.com/burtyb/cb
 #
-# Chris Burton (c) 2019-2023
+# Chris Burton (c) 2019-2025
 #
 
 import argparse, sys, struct, os, hashlib, binascii, time
