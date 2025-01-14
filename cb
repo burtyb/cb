@@ -160,6 +160,13 @@ def cmd_archive():
 		else:
 			fsize=finfo.st_size
 
+		# Check if we need to remap a filename
+		for map in args.map:
+			if map[0] == fn_save:
+				fn_save = map[1]
+				if args.verbose:
+					print("mappedfile:'{}':'{}'".format(map[0], map[1]), file=sys.stderr )
+
 		# Remove leading '/' to prevent clobering files
 		fn_save = fn.lstrip('/')
 
@@ -419,7 +426,7 @@ def cmd_extract():
 			if map[0] == fn:
 				fn = map[1]
 				if args.verbose:
-					print("Mapping file '{}' -> '{}'".format(fn, map[1]), file=sys.stderr )
+					print("mappedfile:'{}':'{}'".format(map[0], map[1]), file=sys.stderr )
 
 		# Get filesize
 		s_fmt = '>Q'
@@ -672,6 +679,13 @@ def cmd_list():
 		fnlen = dat[0]
 		# Get filename
 		fn = i.read(fnlen).decode('utf-8')
+
+		# Check if we need to remap a filename
+		for map in args.map:
+			if map[0] == fn:
+				fn = map[1]
+				if args.verbose:
+					print("mappedfile:'{}':'{}'".format(map[0], map[1]), file=sys.stderr )
 
 		# Get filesize
 		s_fmt = '>Q'
