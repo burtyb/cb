@@ -160,6 +160,9 @@ def cmd_archive():
 		else:
 			fsize=finfo.st_size
 
+		# Remove leading '/' to prevent clobering files
+		fn_save = fn.lstrip('/')
+
 		# Check if we need to remap a filename
 		if args.map != None:
 			for map in args.map:
@@ -167,9 +170,6 @@ def cmd_archive():
 					fn_save = map[1]
 					if args.verbose:
 						print("mappedfile:'{}':'{}'".format(map[0], map[1]), file=sys.stderr )
-
-		# Remove leading '/' to prevent clobering files
-		fn_save = fn.lstrip('/')
 
 		o.write(struct.pack('>I', len(fn_save))) # Length of filename
 		o.write( fn_save.encode('utf-8') ) # Filename
